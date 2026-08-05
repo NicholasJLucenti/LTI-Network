@@ -2,39 +2,6 @@ clear; close all; clc;
 addpath(genpath('.'));
 warning('off', 'MATLAB:ode15s:IntegrationTolNotMet');
 
-% ================================================================
-% V11 PRODUCTION GENERATOR
-%
-% Generation/dynamics logic is UNCHANGED from V10 — same 6-class latent
-% library (L_mirna, L_gk, L_yhill, L_bistable, L_delay, L_overshoot) +
-% NULL, same 4 coupling channels (Ch0 HillRep, Ch1 Additive,
-% Ch2 Multiplicative, Ch3 Null), same Eq0/Eq1 coupling-target axis. Label
-% diversity is not a "feature" and was not touched by the V11 cut.
-%
-% What changed vs V10_gen.m:
-%   - Calls V11_SystemLib / V11_ProcessFeatures instead of V6_* — those
-%     now compute only the V11-kept feature set (see V11_ProcessFeatures.m
-%     header for the exact cut list).
-%   - No more "Xi kept for reference" fprintf note — Xi is fit internally
-%     (required for nullcline/xcorr) but is no longer written to disk at
-%     all, so there's nothing left to reference downstream.
-%   - DATA_ROOT points at a fresh V11 data drive so this never collides
-%     with existing V10 files.
-%
-% Library (indices 0-5), original V8 screening codes noted for reference:
-%   0 = L_mirna    (orig 300): dI/dt = kp*y - (kd+km*x)*I
-%   1 = L_gk       (orig 301): dI/dt = kp*x*(1-I/Imax) - kcat*I/(Km+I)
-%   2 = L_yhill    (orig 303): dI/dt = kp*Hrep(y,k0,n) - kd*I
-%   3 = L_bistable (orig 304): dI/dt = kp*x + kfb*I^2/(k0^2+I^2) - kd*I
-%   4 = L_delay    (orig 305): dI/dt = kp*z - kd*I, dz/dt = kz*(x-z)
-%   5 = L_overshoot(orig 311): dI/dt = kp*x - kp2*x^2 - kd*I
-%   6 = NULL: uncoupled base dynamics, no latent
-%
-% Coupling equation target:
-%   Eq0 = coupling term subtracts from dx
-%   Eq1 = coupling term subtracts from dy
-% NULL class has no coupling term, generated once per system, no Eq split.
-% ================================================================
 DATA_ROOT = 'C:/Users/nickj/LTInetV11 Local Data Drive';
 if ~exist(DATA_ROOT,'dir'); mkdir(DATA_ROOT); end
 
@@ -52,29 +19,18 @@ hill_deg = @(y,km)   y   ./ (km  + y);
 active_latents = [0, 1, 2, 3, 4, 5];
 latent_names_v11 = {'L_mirna','L_gk','L_yhill','L_bistable','L_delay','L_overshoot'};
 coupling_channels = [0, 1, 2];
-coupling_equations = [0, 1];   % 0 = splice into dx, 1 = splice into dy
+coupling_equations = [0, 1];
 
 S = V11_SystemLib();
 n_systems = length(S);
-
-fprintf('=== V11 Production Generation: %d systems x %d latents x %d couplings x %d eq-targets + null ===\n', ...
-    n_systems, length(active_latents), length(coupling_channels), length(coupling_equations));
-fprintf('Latent library: %s\n', strjoin(latent_names_v11, ', '));
-fprintf('Feature set: V11-pruned (nc=24, xc=5, b1c=40, b4=40, +topology/den_energy).\n');
-fprintf('Run V11_TrajAnnex.m next, then V11_DEN_Annex.py.\n\n');
-
-total_saved = 0; total_skipped = 0;
 
 for sys_idx = 1:n_systems
     sysdef = S(sys_idx);
 
     if strcmp(sysdef.libid,'toggle')
-        opts_ode_3state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2, ...
-                          'NonNegative',[1,2,3]);
-        opts_ode_4state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2, ...
-                          'NonNegative',[1,2,3,4]);
-        opts_ode_2state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2, ...
-                          'NonNegative',[1,2]);
+        opts_ode_3state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2,'NonNegative',[1,2,3]);
+        opts_ode_4state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2,'NonNegative',[1,2,3,4]);
+        opts_ode_2state = odeset('RelTol',1e-4,'AbsTol',1e-6,'MaxStep',dt/2,'NonNegative',[1,2]);
         opts_ode = opts_ode_3state;
     elseif strcmp(sysdef.libid,'fhn')
         opts_ode = odeset('RelTol',1e-5,'AbsTol',1e-7,'MaxStep',dt);
@@ -88,27 +44,16 @@ for sys_idx = 1:n_systems
 
     for lat = active_latents
         lat_name = latent_names_v11{lat+1};
-        needs_extra_state = (lat == 4);  % L_delay needs the relay state z
+        needs_extra_state = (lat == 4);
 
         for ch = coupling_channels
             for eq = coupling_equations
 
-            save_dir = sprintf('%s/V11Lat%d_Ch%d_Eq%d_Sys%d_NNdata', ...
-                DATA_ROOT, lat, ch, eq, sys_idx);
+            save_dir = sprintf('%s/V11Lat%d_Ch%d_Eq%d_Sys%d_NNdata', DATA_ROOT, lat, ch, eq, sys_idx);
             if ~exist(save_dir,'dir'); mkdir(save_dir); end
 
-            existing_files = dir(fullfile(save_dir,'example_*.mat'));
-            existing_count = length(existing_files);
-
-            fprintf('\n--- %s | %s | Ch%d | Eq%d ---\n', sysdef.name, lat_name, ch, eq);
-            if existing_count > 0
-                fprintf('  Found %d existing files, targeting %d total\n', existing_count, n_per_config);
-            end
-
-            if existing_count >= n_per_config
-                fprintf('  Already have %d/%d, skipping\n', existing_count, n_per_config);
-                continue;
-            end
+            existing_count = length(dir(fullfile(save_dir,'example_*.mat')));
+            if existing_count >= n_per_config; continue; end
 
             rng(base_seed + sys_idx*10000 + lat*100 + ch*10 + eq);
             saved = existing_count; skipped = 0; attempt = 0;
@@ -118,17 +63,17 @@ for sys_idx = 1:n_systems
                 p = sysdef.psamp();
 
                 p.kp = 0.5+2*rand(); p.kd = 0.2+1.8*rand();
-                p.km_lat = 0.1+1.9*rand();          % L_mirna
-                p.kcat = 0.3+1.7*rand();             % L_gk
-                p.Imax = 0.8+0.4*rand();             % L_gk
+                p.km_lat = 0.1+1.9*rand();
+                p.kcat = 0.3+1.7*rand();
+                p.Imax = 0.8+0.4*rand();
 
                 I_scale_est = (p.kp * 1.0) / p.kd;
-                p.Km_lat = (0.15+0.35*rand()) * I_scale_est;         % L_gk
-                p.lat_hill_k0 = 0.5+2.5*rand(); p.lat_hill_n = round(2+4*rand());  % L_yhill
-                p.kfb_bistable = (0.5+1.5*rand()) * p.kp;            % L_bistable
-                p.k0_bistable = (0.3+0.7*rand()) * I_scale_est;      % L_bistable
-                p.kz_delay = 0.5+2.5*rand();                          % L_delay
-                p.kp2_overshoot = (0.1+0.4*rand()) * p.kp;           % L_overshoot
+                p.Km_lat = (0.15+0.35*rand()) * I_scale_est;
+                p.lat_hill_k0 = 0.5+2.5*rand(); p.lat_hill_n = round(2+4*rand());
+                p.kfb_bistable = (0.5+1.5*rand()) * p.kp;
+                p.k0_bistable = (0.3+0.7*rand()) * I_scale_est;
+                p.kz_delay = 0.5+2.5*rand();
+                p.kp2_overshoot = (0.1+0.4*rand()) * p.kp;
 
                 p.alpha_c = 0.3+1.7*rand();
                 p.beta_c  = 0.3+1.7*rand();
@@ -210,27 +155,18 @@ for sys_idx = 1:n_systems
 
                 fname = fullfile(save_dir, sprintf('example_%04d.mat', saved+1));
                 save(fname, '-struct', 'savepack');
-
                 saved = saved+1;
-                if mod(saved,50)==0
-                    fprintf('  %d/%d (skip=%d)\n', saved, n_per_config, skipped);
-                end
             end
-            fprintf('  saved=%d skipped=%d\n', saved, skipped);
-            total_saved = total_saved + saved; total_skipped = total_skipped + skipped;
             end
         end
     end
 
-    % ── NULL class: uncoupled base dynamics, generated once per system ──
     save_dir = sprintf('%s/V11Lat%d_Ch%d_SysNull_%d_NNdata', DATA_ROOT, NULL_LAT, NULL_COUP, sys_idx);
     if ~exist(save_dir,'dir'); mkdir(save_dir); end
     existing_count_null = length(dir(fullfile(save_dir,'example_*.mat')));
     saved = existing_count_null; skipped = 0; attempt = 0;
 
-    if existing_count_null >= n_per_config
-        fprintf('[%s|NULL] already have %d/%d, skipping\n', sysdef.name, existing_count_null, n_per_config);
-    else
+    if existing_count_null < n_per_config
 
     rng(base_seed + sys_idx*10000 + 9999);
 
@@ -323,34 +259,18 @@ for sys_idx = 1:n_systems
         savepack.params_numeric  = strip_handle_fields(p);
         savepack.structure_label = NULL_LAT;
         savepack.coupling_label  = NULL_COUP;
-        savepack.coupling_eq     = -1;   % undefined / not applicable for NULL
+        savepack.coupling_eq     = -1;
         savepack.system_name     = sysdef.name;
         savepack.latent_name     = 'NULL';
 
         fname = fullfile(save_dir, sprintf('example_%04d.mat', saved+1));
         save(fname, '-struct', 'savepack');
-
         saved = saved+1;
-        if mod(saved,50)==0
-            fprintf('  %d/%d (skip=%d)\n', saved, n_per_config, skipped);
-        end
     end
     end
-    fprintf('[%s|NULL] saved=%d skipped=%d\n', sysdef.name, saved, skipped);
-    total_saved = total_saved + saved; total_skipped = total_skipped + skipped;
 end
 
-fprintf('\n=== V11 PRODUCTION GENERATION COMPLETE ===\n');
-fprintf('Total saved: %d   Total skipped: %d\n', total_saved, total_skipped);
-fprintf('Run V11_TrajAnnex.m next (trajectory-only features), then\n');
-fprintf('V11_DEN_Annex.py (DEN error-signal features).\n');
 
-
-%% ================================================================
-%  HELPER: coupled ODE (base system + latent I [+ delay relay z] + coupling)
-%  eq==0: coupling term subtracts from dx
-%  eq==1: coupling term subtracts from dy
-%% ================================================================
 function dsdt = v11_coupled_ode(t, s, p, sysdef, lat, ch, eq, hill_rep, hill_act, hill_deg, t_start, max_seconds)
     if toc(t_start) > max_seconds
         error('V11:ODETimeout', 'Attempt exceeded %.0fs wall-clock limit', max_seconds);
@@ -369,19 +289,19 @@ function dsdt = v11_coupled_ode(t, s, p, sysdef, lat, ch, eq, hill_rep, hill_act
     base = sysdef.odefn_base(t, xy, p);
 
     switch lat
-        case 0  % L_mirna
+        case 0
             dI = p.kp*xy(2) - (p.kd + p.km_lat*xy(1))*I;
-        case 1  % L_gk
+        case 1
             I_clamped = max(min(I,p.Imax),0);
             dI = p.kp*xy(1)*(1-I_clamped/p.Imax) - p.kcat*I_clamped/(p.Km_lat+I_clamped+1e-8);
-        case 2  % L_yhill
+        case 2
             dI = p.kp*hill_rep(xy(2),p.lat_hill_k0,p.lat_hill_n) - p.kd*I;
-        case 3  % L_bistable
+        case 3
             dI = p.kp*xy(1) + p.kfb_bistable*I^2/(p.k0_bistable^2+I^2+1e-8) - p.kd*I;
-        case 4  % L_delay
+        case 4
             dz = p.kz_delay*(xy(1) - z);
             dI = p.kp*z - p.kd*I;
-        case 5  % L_overshoot
+        case 5
             dI = p.kp*xy(1) - p.kp2_overshoot*xy(1)^2 - p.kd*I;
         otherwise
             dI = -I;
@@ -433,9 +353,6 @@ end
 
 
 function pn = strip_handle_fields(p)
-    % Removes anonymous function handles (hill_rep/hill_deg/hill_act)
-    % from a params struct before saving, so scipy.io.loadmat can read
-    % the result on the Python side (needed by V11_DEN_Annex.py).
     HANDLE_FIELDS = {'hill_rep','hill_deg','hill_act'};
     pn = p;
     for h = 1:length(HANDLE_FIELDS)

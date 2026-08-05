@@ -1,14 +1,4 @@
 function fp_features = V11_MultiFixedPoint(dX, dY, xg, yg)
-% Trimmed from V6_MultiFixedPoint.m per the V11 feature cut: only
-% n_fp_found, fp_x[0], fp_y[0] survived permutation-importance screening.
-% fp_x[1:3]/fp_y[1:3], mean_pairwise_dist, looks_bistable, and max_conf
-% are REMOVED — this now returns a fixed 3-dim vector instead of 10.
-%
-% The local-minima-finding + clustering logic is unchanged (it's shared
-% machinery, not itself a feature) — only the OUTPUT is cut down to what
-% the surviving 3 features need: whether >1 fixed point was found, and
-% the location of the first one.
-
 Fmag = dX.^2 + dY.^2;
 [ng, ~] = size(Fmag);
 
@@ -52,22 +42,20 @@ end
 fp_features = [n_fp_found; fp_x0; fp_y0];
 fp_features(~isfinite(fp_features)) = 0;
 fp_features = max(min(fp_features, 50), -50);
-
 end
 
 function clustered = cluster_nearby(pts, radius)
-    % Greedy clustering: merge points within `radius` grid cells, keep centroid
-    if isempty(pts)
-        clustered = zeros(0,2); return;
-    end
-    used = false(size(pts,1),1);
-    clustered = [];
-    for i = 1:size(pts,1)
-        if used(i); continue; end
-        d = sqrt(sum((pts - pts(i,:)).^2, 2));
-        group = d <= radius & ~used;
-        used(group) = true;
-        centroid = round(mean(pts(group,:),1));
-        clustered = [clustered; centroid];
-    end
+if isempty(pts)
+    clustered = zeros(0,2); return;
+end
+used = false(size(pts,1),1);
+clustered = [];
+for i = 1:size(pts,1)
+    if used(i); continue; end
+    d = sqrt(sum((pts - pts(i,:)).^2, 2));
+    group = d <= radius & ~used;
+    used(group) = true;
+    centroid = round(mean(pts(group,:),1));
+    clustered = [clustered; centroid];
+end
 end

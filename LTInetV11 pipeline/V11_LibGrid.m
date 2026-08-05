@@ -1,6 +1,4 @@
 function Phi = V11_LibGrid(x, y, p, libid)
-% Unchanged from V6_LibGrid.m — needed to evaluate the fitted vector
-% field on a grid for nullcline extraction (a kept V11 feature block).
 x=x(:);y=y(:);n=length(x);
 hr=p.hill_rep(y,p.hill_k0,p.hill_n); hd=p.hill_deg(y,p.hill_km);
 switch libid

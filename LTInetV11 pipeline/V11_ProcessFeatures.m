@@ -1,41 +1,9 @@
 function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, ...
     sg_p, sg_f, p, sysdef, ridge_lambda, sparsity_thresh, n_stridge_iters)
-% V11_ProcessFeatures — trimmed from V6_ProcessFeatures.m per the final
-% V11 feature cut. Changes from V6:
-%
-%   REMOVED ENTIRELY (dead in V11, computed nothing downstream uses):
-%     - v6_new_features (FNN + TransferEntropy + ResidualSpectrum, 12 dims)
-%     - pack.Xi / pack.Xi_ternary (STRidge coefficients — superseded by
-%       DEN's den_w_x/w_y upstream of V11, and V11 doesn't even keep DEN's
-%       Stage-2 den_xi_w, so raw Xi has no remaining consumer)
-%     - pack.col_names, pack.libid, pack.t_ode (metadata about the above,
-%       equally unused downstream)
-%
-%   KEPT BUT STILL COMPUTED IN FULL, THEN SLICED:
-%     - nullcline_features: g1-g7 sub-blocks share a PCA/eigendecomposition
-%       (nc_shape_internal) that's cheaper to compute whole than to hand-
-%       split — computed at full 49-dim, then indexed down to the 24
-%       surviving dims with KEEP_NC immediately before saving.
-%     - xcorr_features: same logic, computed at full 10-dim, sliced to 5
-%       with KEEP_XC.
-%   Both KEEP_* lists are given in the SAME 0-indexed order used in the
-%   V11 Python training pipeline; +1 is applied here for MATLAB indexing.
-%   This is a deliberate choice over hand-rewriting g1-g7: manually
-%   decomposing a shared eigendecomposition into "only the surviving
-%   terms" saves negligible compute and materially raises the risk of an
-%   off-by-one mapping error versus the already-validated raw ordering.
-%
-%   fp_multi_features now comes from V11_MultiFixedPoint (3 dims, not 10).
-%
-% Xi itself (both equations) is STILL fitted internally — nullcline_features
-% is literally the nullclines of the fitted vector field (dX,dY from
-% Xi via V11_LibGrid), and xcorr_features needs resid_dx = dx_obs - dx_model
-% (dx_model from Xi via V11_LibRow). Neither kept feature exists without it.
 
     ok = false; pack = struct();
     libid = sysdef.libid;
 
-    % 0-indexed (Python/V11-trainer convention) -> MATLAB +1
     KEEP_NC = [1,2,3,4,5, 11,12, 13,14,15,16, 25,26,27,28, 29,30,31,32,33, 34, 46,47,49];
     KEEP_XC = [2,4,5,7,10];
 
@@ -47,9 +15,7 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
     dxdt = sgolayfilt(gradient(x_data,dt),sg_p,sg_f);
     dydt = sgolayfilt(gradient(y_data,dt),sg_p,sg_f);
     tSx=norm(dxdt,2); tSy=norm(dydt,2);
-    if tSx<1e-8||tSy<1e-8
-        pack.fail_reason = 'tSx_or_tSy_too_small'; return;
-    end
+    if tSx<1e-8||tSy<1e-8; return; end
     dSdtN=[dxdt/tSx, dydt/tSy];
 
     XiN=zeros(n_terms,2); fail=false;
@@ -69,22 +35,16 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
         try; c=A\b; catch; fail=true; break; end
         cf=zeros(n_terms,1); cf(active)=c; XiN(:,eq)=cf;
     end
-    if fail||any(~isfinite(XiN(:)))
-        pack.fail_reason = 'stridge_fail'; return;
-    end
+    if fail||any(~isfinite(XiN(:))); return; end
 
     Xi=zeros(n_terms,2);
     Xi(:,1)=(XiN(:,1)*tSx)./colscale'; Xi(:,2)=(XiN(:,2)*tSy)./colscale';
     Xi(abs(Xi)<0.005)=0;
-    if all(Xi(:)==0)
-        pack.fail_reason = 'all_zero_Xi'; return;
-    end
+    if all(Xi(:)==0); return; end
 
     [nullcline_full, ok_nc, fp_extra] = v11_nullcline_features_internal( ...
         x_data, y_data, N, p, libid, Xi, tSx, tSy, sysdef.multi_fp);
-    if ~ok_nc
-        pack.fail_reason = 'nullcline_fail'; return;
-    end
+    if ~ok_nc; return; end
 
     dx_obs=sgolayfilt(gradient(xa,dt),sg_p,sg_f);
     dx_model=zeros(n_all,1);
@@ -96,9 +56,7 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
     end
     resid_dx = dx_obs - dx_model;
     xcorr_full = v11_compute_xcorr_internal(resid_dx, xa, ya);
-    if any(~isfinite(xcorr_full))
-        pack.fail_reason = 'xcorr_fail'; return;
-    end
+    if any(~isfinite(xcorr_full)); return; end
 
     half=round(n_all/2); x2=xa(half:end); y2=ya(half:end);
     sust=(var(x2)>1e-4)&&(var(y2)>1e-4);
