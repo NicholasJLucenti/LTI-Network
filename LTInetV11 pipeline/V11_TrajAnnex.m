@@ -7,13 +7,6 @@ MIN_LINE   = 2;
 N_SCALES   = 6;
 dt = 0.05;
 
-KEEP_RQA_X = [2,3,4,5,7];
-KEEP_RQA_Y = [2,3,4,5,6,7];
-KEEP_CRQA  = [2,3,4,5,6,7];
-KEEP_WAV_X = [1,2,4,6];
-KEEP_WAV_Y = [1,2,3,6];
-KEEP_POI   = [1,4,5,6];
-
 folders = dir(DATA_ROOT);
 folders = folders([folders.isdir]);
 folders = folders(~ismember({folders.name},{'.','..'}));
@@ -62,28 +55,28 @@ for fi = 1:length(v11_folders)
         end
         amp_features = max(min(amp_mean_x, 5), 0);
 
-        rqa_x_full = compute_rqa(x_all, RR_TARGET, MIN_LINE);
-        rqa_y_full = compute_rqa(y_all, RR_TARGET, MIN_LINE);
-        if ~all(isfinite(rqa_x_full)) || ~all(isfinite(rqa_y_full)); continue; end
+        [DET_x,LAM_x,TT_x,ENTR_x,~,DIV_x] = compute_rqa(x_all, RR_TARGET, MIN_LINE);
+        [DET_y,LAM_y,TT_y,ENTR_y,L_mean_y,DIV_y] = compute_rqa(y_all, RR_TARGET, MIN_LINE);
+        rqa_x = [DET_x;LAM_x;TT_x;ENTR_x;DIV_x];
+        rqa_y = [DET_y;LAM_y;TT_y;ENTR_y;L_mean_y;DIV_y];
+        if ~all(isfinite(rqa_x)) || ~all(isfinite(rqa_y)); continue; end
 
-        crqa_full = compute_crqa(x_all, y_all, RR_TARGET, MIN_LINE);
-        if ~all(isfinite(crqa_full)); crqa_full = zeros(7,1); end
+        [CDET,CLAM,CTT,CENTR,CL_mean,CDIV] = compute_crqa(x_all, y_all, RR_TARGET, MIN_LINE);
+        crqa = [CDET;CLAM;CTT;CENTR;CL_mean;CDIV];
+        if ~all(isfinite(crqa)); crqa = zeros(6,1); end
 
-        wavelet_full = compute_wavelet_energy(x_all, y_all, dt, N_SCALES);
-        if ~all(isfinite(wavelet_full)); wavelet_full = zeros(12,1); end
-        wavelet_x_full = wavelet_full(1:6);
-        wavelet_y_full = wavelet_full(7:12);
+        [energy_x, energy_y] = compute_wavelet_energy(x_all, y_all, dt, N_SCALES);
+        if ~all(isfinite(energy_x)) || ~all(isfinite(energy_y))
+            energy_x = zeros(6,1); energy_y = zeros(6,1);
+        end
+        wavelet_x = energy_x([1,2,4,6]);
+        wavelet_y = energy_y([1,2,3,6]);
 
-        poincare_full = compute_poincare(x_all, y_all);
-        if ~all(isfinite(poincare_full)); poincare_full = zeros(6,1); end
+        [mean_y_norm,~,~,kurt,period_mean,period_cv] = compute_poincare(x_all, y_all);
+        poincare = [mean_y_norm;kurt;period_mean;period_cv];
+        if ~all(isfinite(poincare)); poincare = zeros(4,1); end
 
-        all_new_trajectory_features = [amp_features; ...
-                                        rqa_x_full(KEEP_RQA_X); ...
-                                        rqa_y_full(KEEP_RQA_Y); ...
-                                        crqa_full(KEEP_CRQA); ...
-                                        wavelet_x_full(KEEP_WAV_X); ...
-                                        wavelet_y_full(KEEP_WAV_Y); ...
-                                        poincare_full(KEEP_POI)];
+        all_new_trajectory_features = [amp_features; rqa_x; rqa_y; crqa; wavelet_x; wavelet_y; poincare];
 
         if ~all(isfinite(all_new_trajectory_features)) || numel(all_new_trajectory_features) ~= 37
             continue;
@@ -95,7 +88,7 @@ for fi = 1:length(v11_folders)
 end
 
 
-function rqa = compute_rqa(x, rr_target, min_line)
+function [DET,LAM,TT,ENTR,L_mean,DIV] = compute_rqa(x, rr_target, min_line)
     N = length(x); x = x(:);
     if N > 400
         step = floor(N/300); x = x(1:step:end); N = length(x);
@@ -106,18 +99,17 @@ function rqa = compute_rqa(x, rr_target, min_line)
     if epsilon < 1e-10; epsilon = 1e-10; end
     R = double(D <= epsilon);
     R(1:N+1:end) = 0;
-    actual_RR = sum(R(:)) / (N*(N-1));
 
     [DET, L_mean, L_max, ENTR] = diag_stats(R, N, min_line);
     DIV = 1 / max(L_max, 1);
     [LAM, TT] = vert_stats(R, N, min_line);
 
-    rqa = max(min([actual_RR; DET; LAM; min(TT,50); ...
-                   min(ENTR,10); min(L_mean,50); DIV], 100), 0);
+    DET=min(max(DET,0),100); LAM=min(max(LAM,0),100); TT=min(max(TT,0),50);
+    ENTR=min(max(ENTR,0),10); L_mean=min(max(L_mean,0),50); DIV=min(max(DIV,0),100);
 end
 
 
-function crqa = compute_crqa(x, y, rr_target, min_line)
+function [CDET,CLAM,CTT,CENTR,CL_mean,CDIV] = compute_crqa(x, y, rr_target, min_line)
     N = min(length(x), length(y));
     x = x(1:N); y = y(1:N);
     if N > 400
@@ -133,13 +125,12 @@ function crqa = compute_crqa(x, y, rr_target, min_line)
     if epsilon < 1e-10; epsilon = 1e-10; end
     CR = double(D <= epsilon);
 
-    CRR = sum(CR(:)) / numel(CR);
     [CDET, CL_mean, CL_max, CENTR] = diag_stats(CR, N, min_line);
     CDIV = 1 / max(CL_max, 1);
     [CLAM, CTT] = vert_stats(CR, N, min_line);
 
-    crqa = max(min([CRR; CDET; CLAM; min(CTT,50); ...
-                    min(CENTR,10); min(CL_mean,50); CDIV], 100), 0);
+    CDET=min(max(CDET,0),100); CLAM=min(max(CLAM,0),100); CTT=min(max(CTT,0),50);
+    CENTR=min(max(CENTR,0),10); CL_mean=min(max(CL_mean,0),50); CDIV=min(max(CDIV,0),100);
 end
 
 
@@ -201,7 +192,7 @@ function runs = find_runs(vec, min_len)
 end
 
 
-function wf = compute_wavelet_energy(x, y, dt, n_scales)
+function [energy_x, energy_y] = compute_wavelet_energy(x, y, dt, n_scales)
     x_cent = x - mean(x);
     y_cent = y - mean(y);
     N = length(x_cent);
@@ -230,15 +221,16 @@ function wf = compute_wavelet_energy(x, y, dt, n_scales)
 
     total_x = sum(energy_x) + 1e-12;
     total_y = sum(energy_y) + 1e-12;
-    wf = max(min([energy_x/total_x; energy_y/total_y], 5), 0);
+    energy_x = min(max(energy_x/total_x, 0), 5);
+    energy_y = min(max(energy_y/total_y, 0), 5);
 end
 
 
-function pf = compute_poincare(x, y)
+function [mean_y_norm,std_y_norm,skew,kurt,period_mean,period_cv] = compute_poincare(x, y)
     x_cent = x - mean(x);
     crossings = find(x_cent(1:end-1) < 0 & x_cent(2:end) >= 0);
     if length(crossings) < 4
-        pf = zeros(6,1); return;
+        mean_y_norm=0;std_y_norm=0;skew=0;kurt=0;period_mean=0;period_cv=0; return;
     end
 
     y_cross = zeros(length(crossings),1);
@@ -269,6 +261,10 @@ function pf = compute_poincare(x, y)
         kurt = mean(((y_norm - mu)/sigma).^4);
     end
 
-    pf = max(min([mean(y_norm); std(y_norm); skew; kurt; ...
-                  period_mean; period_cv], 10), -10);
+    mean_y_norm=max(min(mean(y_norm),10),-10);
+    std_y_norm=max(min(std(y_norm),10),-10);
+    skew=max(min(skew,10),-10);
+    kurt=max(min(kurt,10),-10);
+    period_mean=max(min(period_mean,10),-10);
+    period_cv=max(min(period_cv,10),-10);
 end

@@ -24,9 +24,6 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ANNEX_FLAG = 'den_annex_v11_complete'
 
-KEEP_PHASE_STD_WX = [1, 2, 3, 4, 6]
-KEEP_PHASE_STD_WY = [2, 3, 5, 6, 7]
-
 PARAMS_BY_SYSTEM = {
     'goodwin': ['alpha', 'd1', 'ks', 'Vmax', 'hill_k0', 'hill_n', 'hill_km'],
     'brusselator': ['a', 'b', 'hill_k0', 'hill_n', 'hill_km'],
@@ -214,27 +211,32 @@ def fit_chunk(system_name, filepaths):
         wx_ex = w_x_np[local_i]
         wy_ex = w_y_np[local_i]
 
+        STD_BINS_WX = [1, 2, 3, 4, 6]
+        STD_BINS_WY = [2, 3, 5, 6, 7]
+
         x_cent = x_ex - x_ex.mean()
         inst_phase = np.mod(np.angle(hilbert(x_cent)), 2 * np.pi)
         bin_edges = np.linspace(0, 2 * np.pi, N_BINS + 1)
 
         std_wx = wx_ex.std() + 1e-8
         std_wy = wy_ex.std() + 1e-8
-        phase_mean_wx = np.zeros(N_BINS); phase_std_wx = np.zeros(N_BINS)
-        phase_mean_wy = np.zeros(N_BINS); phase_std_wy = np.zeros(N_BINS)
+        phase_mean_wx = np.zeros(N_BINS)
+        phase_mean_wy = np.zeros(N_BINS)
+        phase_std_wx = np.zeros(len(STD_BINS_WX))
+        phase_std_wy = np.zeros(len(STD_BINS_WY))
         for b in range(N_BINS):
             mask = (inst_phase >= bin_edges[b]) & (inst_phase < bin_edges[b + 1])
-            if mask.sum() >= 3:
-                phase_mean_wx[b] = wx_ex[mask].mean() / std_wx
-                phase_std_wx[b] = wx_ex[mask].std() / std_wx
-                phase_mean_wy[b] = wy_ex[mask].mean() / std_wy
-                phase_std_wy[b] = wy_ex[mask].std() / std_wy
+            if mask.sum() < 3:
+                continue
+            phase_mean_wx[b] = wx_ex[mask].mean() / std_wx
+            phase_mean_wy[b] = wy_ex[mask].mean() / std_wy
+            if b in STD_BINS_WX:
+                phase_std_wx[STD_BINS_WX.index(b)] = wx_ex[mask].std() / std_wx
+            if b in STD_BINS_WY:
+                phase_std_wy[STD_BINS_WY.index(b)] = wy_ex[mask].std() / std_wy
 
         den_w_phase_features = np.clip(np.concatenate([
-            phase_mean_wx,
-            phase_std_wx[KEEP_PHASE_STD_WX],
-            phase_mean_wy,
-            phase_std_wy[KEEP_PHASE_STD_WY],
+            phase_mean_wx, phase_std_wx, phase_mean_wy, phase_std_wy,
         ]), -10, 10).astype(np.float32)
 
         lags = [-5, 0, 5]

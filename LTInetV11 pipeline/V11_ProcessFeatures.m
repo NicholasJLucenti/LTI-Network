@@ -4,9 +4,6 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
     ok = false; pack = struct();
     libid = sysdef.libid;
 
-    KEEP_NC = [1,2,3,4,5, 11,12, 13,14,15,16, 25,26,27,28, 29,30,31,32,33, 34, 46,47,49];
-    KEEP_XC = [2,4,5,7,10];
-
     [Theta_full, ~] = V11_BuildLib(x_data, y_data, N, p, libid);
     n_terms = size(Theta_full,2);
 
@@ -42,7 +39,7 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
     Xi(abs(Xi)<0.005)=0;
     if all(Xi(:)==0); return; end
 
-    [nullcline_full, ok_nc, fp_extra] = v11_nullcline_features_internal( ...
+    [nullcline_features, ok_nc, fp_extra] = v11_nullcline_features_internal( ...
         x_data, y_data, N, p, libid, Xi, tSx, tSy, sysdef.multi_fp);
     if ~ok_nc; return; end
 
@@ -55,8 +52,8 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
         end
     end
     resid_dx = dx_obs - dx_model;
-    xcorr_full = v11_compute_xcorr_internal(resid_dx, xa, ya);
-    if any(~isfinite(xcorr_full)); return; end
+    xcorr_features = v11_compute_xcorr_internal(resid_dx, xa, ya);
+    if any(~isfinite(xcorr_features)); return; end
 
     half=round(n_all/2); x2=xa(half:end); y2=ya(half:end);
     sust=(var(x2)>1e-4)&&(var(y2)>1e-4);
@@ -70,8 +67,8 @@ function [ok, pack] = V11_ProcessFeatures(x_data, y_data, xa, ya, N, n_all, dt, 
     elseif ~sust; topology='STEADY STATE';
     else; topology='UNDETERMINED'; end
 
-    pack.nullcline_features = nullcline_full(KEEP_NC);
-    pack.xcorr_features     = xcorr_full(KEEP_XC);
+    pack.nullcline_features = nullcline_features;
+    pack.xcorr_features     = xcorr_features;
     pack.fp_multi_features  = fp_extra;
     pack.topology            = topology;
     pack.x_data_all          = xa;
@@ -82,7 +79,7 @@ end
 
 
 function [feat, ok, fp_extra] = v11_nullcline_features_internal(x_data, y_data, N, p, libid, Xi, tSx, tSy, is_multi_fp)
-    ok=false; feat=zeros(49,1); fp_extra=zeros(3,1);
+    ok=false; fp_extra=zeros(3,1);
     ng=50; xg=linspace(min(x_data),max(x_data),ng); yg=linspace(min(y_data),max(y_data),ng);
     [XG,YG]=meshgrid(xg,yg);
     Phi=V11_LibGrid(XG(:),YG(:),p,libid);
@@ -103,32 +100,32 @@ function [feat, ok, fp_extra] = v11_nullcline_features_internal(x_data, y_data, 
           (dY(rf,min(cf+1,ng))-dY(rf,max(cf-1,1)))/(2*gx+1e-8)];
     nx1=nx1/(norm(nx1)+1e-8); nx2=nx2/(norm(nx2)+1e-8);
     ca=acos(min(abs(dot(nx1,nx2)),1));
-    g3=[fp_xn,fp_yn,fp_d,ca];
 
     [xnp,ynx]=extract_nc_internal(dX,xg,yg); [xny,ynp]=extract_nc_internal(dY,xg,yg);
-    g1=nc_shape_internal((xnp-xc)/(ax+1e-8),(ynx-yc_)/(ay+1e-8));
-    g2=nc_shape_internal((xny-xc)/(ax+1e-8),(ynp-yc_)/(ay+1e-8));
+    f1=nc_shape_internal((xnp-xc)/(ax+1e-8),(ynx-yc_)/(ay+1e-8));
+    f2=nc_shape_internal((xny-xc)/(ax+1e-8),(ynp-yc_)/(ay+1e-8));
+    cx1=f1(1); cy1=f1(2); pa1=f1(3); asp1=f1(4); cf1=f1(5); arc1=f1(11); sr1=f1(12);
+    cx2=f2(1); cy2=f2(2); pa2=f2(3); asp2=f2(4); sr2=f2(12);
 
     Phi_o=V11_LibGrid(x_data,y_data,p,libid);
     dxo=Phi_o*Xi(:,1); dyo=Phi_o*Xi(:,2);
     [~,mdi]=max(abs(dxo));
-    g4=[mean(dxo)/(tSx+1e-8),std(dxo)/(tSx+1e-8), ...
-        mean(dyo)/(tSy+1e-8),std(dyo)/(tSy+1e-8),mdi/N];
+    mean_dxo_n=mean(dxo)/(tSx+1e-8); std_dxo_n=std(dxo)/(tSx+1e-8);
+    mean_dyo_n=mean(dyo)/(tSy+1e-8); std_dyo_n=std(dyo)/(tSy+1e-8);
+    mdi_n=mdi/N;
 
-    sdx=sign(dxo);sdy=sign(dyo);
-    cx=sum(abs(diff(sdx))>0); cy=sum(abs(diff(sdy))>0);
-    nc_=max(sum(abs(diff(sign(x_data-mean(x_data))))>0)/2,1);
-    g6=[cx/nc_,(sum(diff(sdx)<0)-sum(diff(sdx)>0))/(cx+1e-8), ...
-        cy/nc_,(sum(diff(sdy)<0)-sum(diff(sdy)>0))/(cy+1e-8)];
+    sdx=sign(dxo);
+    x_cross_count=sum(abs(diff(sdx))>0);
+    x_selfcross_count=max(sum(abs(diff(sign(x_data-mean(x_data))))>0)/2,1);
+    x_null_density=x_cross_count/x_selfcross_count;
 
-    gg1=g1(:);gg2=g2(:);
     cr=@(a,b) max(min(a/(b+1e-6*(abs(b)<1e-6)),5),-5);
-    g7=[gg1(4)-gg2(4);gg1(5:8)-gg2(5:8);gg1(9)-gg2(9);gg1(10)-gg2(10); ...
-        gg1(11)-gg2(11);gg1(12)-gg2(12); ...
-        cr(gg1(4),gg2(4));cr(gg1(11),gg2(11));cr(gg1(12),gg2(12))];
+    sr_diff=sr1-sr2; cr_asp=cr(asp1,asp2); cr_sr=cr(sr1,sr2);
 
-    feat=max(min([g1(:)',g2(:)',g3(:)',g4(:)',g6(:)',g7(:)']',50),-50);
-    ok=all(isfinite(feat)) && numel(feat)==49;
+    feat=max(min([cx1;cy1;pa1;asp1;cf1;arc1;sr1; cx2;cy2;pa2;asp2; ...
+                  fp_xn;fp_yn;fp_d;ca; mean_dxo_n;std_dxo_n;mean_dyo_n;std_dyo_n;mdi_n; ...
+                  x_null_density; sr_diff;cr_asp;cr_sr],50),-50);
+    ok=all(isfinite(feat)) && numel(feat)==24;
 
     if is_multi_fp
         fp_extra = V11_MultiFixedPoint(dX, dY, xg, yg);
@@ -169,10 +166,11 @@ function xcf=v11_compute_xcorr_internal(rdx,xa,ya)
     n=min([length(xn),length(yn),length(rn)]);
     xn=xn(1:n);yn=yn(1:n);rn=rn(1:n);
     [xc,lx]=xcorr(rn,xn,ml,'normalized');
-    [pvx,pix]=max(abs(xc)); plx=lx(pix); pwx=sum(abs(xc)>pvx/2);
+    pvx=max(abs(xc));
     lax=(mean(abs(xc(lx>0)))-mean(abs(xc(lx<0))))/(mean(abs(xc(lx>0)))+mean(abs(xc(lx<0)))+1e-8);
+    xc0=xc(lx==0);
     [yc,ly]=xcorr(rn,yn,ml,'normalized');
-    [pvy,piy]=max(abs(yc)); ply=ly(piy); pwy=sum(abs(yc)>pvy/2);
-    lay=(mean(abs(yc(ly>0)))-mean(abs(yc(ly<0))))/(mean(abs(yc(ly>0)))+mean(abs(yc(ly<0)))+1e-8);
-    xcf=[plx;pvx;pwx;lax;xc(lx==0);ply;pvy;pwy;lay;yc(ly==0)];
+    pvy=max(abs(yc));
+    yc0=yc(ly==0);
+    xcf=[pvx;lax;xc0;pvy;yc0];
 end
